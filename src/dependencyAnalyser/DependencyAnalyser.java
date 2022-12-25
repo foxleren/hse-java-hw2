@@ -7,36 +7,56 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static utils.PathUtil.getPathFromRoot;
+
+/*
+Класс, анализирующий зависимости в выбранной директории.
+ */
 public class DependencyAnalyser {
-    private static AppStatus appStatus = new AppStatus(Status.OK, "OK");
 
-    private static String rootPath;
+    /*
+    Статус приложения.
+     */
+    private AppStatus appStatus = new AppStatus(StatusCode.OK, "OK");
 
-    private static SortMode sortMode;
+    /*
+    Путь до корневой директории.
+     */
+    private String rootPath;
 
-    private final static List<File> files = new ArrayList<>();
+    /*
+    Способ сортировки файлов.
+     */
+    private SortMode sortMode;
 
-    private final static Map<File, List<File>> fileDependencies = new HashMap<>();
+    /*
+    Список файлов в директории и поддиректориях.
+     */
+    private final List<File> files = new ArrayList<>();
+
+    /*
+    Список файлов и их зависимостей.
+     */
+    private final Map<File, List<File>> fileDependencies = new HashMap<>();
+
+    /*
+    Объект, отвечающий за работу с графом путей.
+     */
+    private GraphInterpreter graphInterpreter;
 
     public DependencyAnalyser() {
-        configureApp();
     }
 
-    enum Status {
-        OK, FOUND_CYCLE, INVALID_REQUIREMENT, NO_FILES, READING_ERROR
-    }
-
+    /*
+    Способ сортировки файлов.
+     */
     enum SortMode {
         PATH, TOPOLOGY
     }
 
-    private record AppStatus(Status status, String message) {
-        @Override
-        public String toString() {
-            return "Status: " + status.toString() + " Message: " + message;
-        }
-    }
-
+    /*
+    Конфигурирование.
+     */
     private void configureApp() {
         System.out.print("Enter root location: ");
         Scanner scanner = new Scanner(System.in);
@@ -47,43 +67,60 @@ public class DependencyAnalyser {
         setSortType();
     }
 
+    /*
+    Выбор способа сортировки.
+     */
     private void setSortType() {
-        System.out.println("Choose type of sort: \n1. Path\n2. Topology");
-        boolean isSet = false;
-        Scanner scanner = new Scanner(System.in);
-        int ans;
-        while (!isSet) {
-            ans = scanner.nextInt();
-            switch (ans) {
-                case 1 -> {
-                    sortMode = SortMode.PATH;
-                    isSet = true;
+        try {
+            System.out.println("Choose type of sort: \n1. Path\n2. Topology");
+            boolean isSet = false;
+            Scanner scanner = new Scanner(System.in);
+            int ans;
+            while (!isSet) {
+                ans = scanner.nextInt();
+                switch (ans) {
+                    case 1 -> {
+                        sortMode = SortMode.PATH;
+                        isSet = true;
+                    }
+                    case 2 -> {
+                        sortMode = SortMode.TOPOLOGY;
+                        isSet = true;
+                    }
+                    default -> System.out.println("Invalid value. Repeat operation.");
                 }
-                case 2 -> {
-                    sortMode = SortMode.TOPOLOGY;
-                    isSet = true;
-                }
-                default -> System.out.println("Invalid value. Repeat operation.");
             }
+        } catch (InputMismatchException e) {
+            System.out.println("Invalid value. Repeat operation.");
+            setSortType();
         }
     }
 
+    /*
+    Метод, управляющий логикой приложения.
+     */
     public void run() {
+        configureApp();
         getDirectoryContent(rootPath);
-        if (appStatus.status == Status.OK && sortMode == SortMode.TOPOLOGY) {
-            GraphInterpreter.buildGraph();
+        if (appStatus.statusCode() == StatusCode.OK && sortMode == SortMode.TOPOLOGY) {
+            graphInterpreter = new GraphInterpreter(rootPath, files, fileDependencies);
+            graphInterpreter.buildGraph();
         }
-        if (appStatus.status == Status.OK) {
+
+        if (appStatus.statusCode() == StatusCode.OK) {
             sortFiles();
         }
-        if (appStatus.status == Status.OK) {
+        if (appStatus.statusCode() == StatusCode.OK) {
             saveSortedFiles();
         }
         finishApp();
     }
 
+    /*
+    При завершении программы выводятся файлы или инфомация об ошибке, если таковая есть.
+     */
     private void finishApp() {
-        if (appStatus.status == Status.OK) {
+        if (appStatus.statusCode() == StatusCode.OK) {
             printSortedFiles();
         } else {
             System.out.println(appStatus);
@@ -91,22 +128,26 @@ public class DependencyAnalyser {
     }
 
     /**
-     * Shows files location relative to the root.
+     * Выводит список файлов в зависимости от типа сортировки.
      */
     private void printSortedFiles() {
         if (sortMode == SortMode.TOPOLOGY) {
             System.out.println("Sorted by TOPOLOGY files: ");
-            for (int i = 0; i < files.size(); i++) {
-                System.out.println(getPathFromRoot(files.get(GraphInterpreter.sortedVerticals.get(i)).getAbsolutePath()));
+            var sortedIndexes = graphInterpreter.getIndexesOfSortedGraph();
+            for (Integer sortedIndex : sortedIndexes) {
+                System.out.println(getPathFromRoot(rootPath, files.get(sortedIndex)));
             }
         } else if (sortMode == SortMode.PATH) {
             System.out.println("Sorted by PATH files: ");
             for (var file : files) {
-                System.out.println(getPathFromRoot(file.getAbsolutePath()));
+                System.out.println(getPathFromRoot(rootPath, file));
             }
         }
     }
 
+    /*
+    Рекурсивное получение содержимого директорий.
+     */
     private void getDirectoryContent(String directoryPath) {
         File root = new File(directoryPath);
         String resultFilename = "sorted.txt";
@@ -121,10 +162,13 @@ public class DependencyAnalyser {
             }
         }
         if (files.size() == 0) {
-            appStatus = new AppStatus(Status.NO_FILES, "No files were found");
+            appStatus = new AppStatus(StatusCode.NO_FILES, "No files were found");
         }
     }
 
+    /*
+    Считывание зависимостей для файла.
+     */
     private void getFileContent(File file) {
         files.add(file);
 
@@ -149,7 +193,7 @@ public class DependencyAnalyser {
 
                         File tmp_file = new File(filePath);
                         if (!tmp_file.exists()) {
-                            appStatus = new AppStatus(Status.INVALID_REQUIREMENT, "Invalid requirement in file: " + getPathFromRoot(filePath));
+                            appStatus = new AppStatus(StatusCode.INVALID_REQUIREMENT, "Invalid requirement in file: " + getPathFromRoot(rootPath, tmp_file));
                             return;
                         }
                         dependencies.add(tmp_file);
@@ -159,17 +203,27 @@ public class DependencyAnalyser {
                 line = bf.readLine();
             }
         } catch (IOException e) {
-            appStatus = new AppStatus(Status.READING_ERROR, e.getMessage());
+            appStatus = new AppStatus(StatusCode.FILE_ERROR, e.getMessage());
+        } catch (Exception e) {
+            appStatus = new AppStatus(StatusCode.ERROR, e.getMessage());
         }
     }
 
-    private static String getPathFromRoot(String absolutePath) {
-        if (absolutePath != null) {
-            return absolutePath.substring(rootPath.length());
+    /*
+    Сортировка файлов в зависимости от выбранной опции.
+     */
+    private void sortFiles() {
+        if (sortMode == SortMode.TOPOLOGY) {
+            graphInterpreter.sortGraph();
+            appStatus = graphInterpreter.getGraphInterpreterStatus();
+        } else if (sortMode == SortMode.PATH) {
+            Collections.sort(files);
         }
-        return "";
     }
 
+    /*
+    Сохранение файлов в порядке сортировки.
+     */
     private void saveSortedFiles() {
         try (FileWriter writer = new FileWriter(rootPath + File.separatorChar + "sorted.txt")) {
             for (var file : files) {
@@ -177,81 +231,9 @@ public class DependencyAnalyser {
                 writer.write("\n");
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void sortFiles() {
-        if (sortMode == SortMode.TOPOLOGY) {
-            GraphInterpreter.sortGraph();
-        } else if (sortMode == SortMode.PATH) {
-            Collections.sort(files);
-        }
-    }
-
-    public static class GraphInterpreter {
-        private final static Stack<Integer> sortedVerticals = new Stack<>();
-
-        private static int[][] dependencyMatrix;
-
-        private static boolean[] usedVerticals;
-
-        public static void buildGraph() {
-            dependencyMatrix = new int[files.size()][files.size()];
-            for (int i = 0; i < files.size(); i++) {
-                for (int j = 0; j < files.size(); j++) {
-                    if (fileDependencies.containsKey(files.get(i))) {
-                        var depends = fileDependencies.get(files.get(i));
-                        if (depends.contains(files.get(j))) {
-                            dependencyMatrix[i][j] = 1;
-                        }
-                        if (dependencyMatrix[i][j] == 1 && dependencyMatrix[j][i] == 1) {
-                            appStatus = new AppStatus(Status.FOUND_CYCLE, "Found cycle: " +
-                                    getPathFromRoot(files.get(i).getAbsolutePath()) + " " +
-                                    getPathFromRoot(files.get(j).getAbsolutePath()));
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        private static void sortGraph() {
-            if (sortMode == SortMode.TOPOLOGY) {
-                usedVerticals = new boolean[files.size()];
-                for (int i = 0; i < files.size(); i++) {
-                    if (appStatus.status == Status.FOUND_CYCLE) {
-                        break;
-                    }
-                    if (!usedVerticals[i]) {
-                        dfs(-1, -1, i);
-                    }
-                }
-            }
-        }
-
-        private static void dfs(int startIndex, int prevIndex, int index) {
-            if (startIndex == index) {
-                appStatus = new AppStatus(Status.FOUND_CYCLE, "Found cycle: " +
-                        getPathFromRoot(files.get(prevIndex).getAbsolutePath()) + " " +
-                        getPathFromRoot(files.get(startIndex).getAbsolutePath()));
-                return;
-            }
-
-            if (startIndex == -1) {
-                startIndex = 0;
-            }
-
-            for (int j = 0; j < files.size(); j++) {
-                if (dependencyMatrix[index][j] == 1 && !usedVerticals[j]) {
-                    dfs(startIndex, index, j);
-                }
-            }
-
-            if (!usedVerticals[index]) {
-                usedVerticals[index] = true;
-                sortedVerticals.push(index);
-            }
+            appStatus = new AppStatus(StatusCode.FILE_ERROR, e.getMessage());
+        } catch (Exception e) {
+            appStatus = new AppStatus(StatusCode.ERROR, e.getMessage());
         }
     }
 }
